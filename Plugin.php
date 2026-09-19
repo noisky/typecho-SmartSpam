@@ -4,7 +4,7 @@
  * 
  * @package SmartSpam
  * @author 饭饭
- * @version 3.0.0
+ * @version 3.0.1
  * @link https://github.com/noisky/typecho-SmartSpam
  */
 
@@ -167,150 +167,187 @@ class SmartSpam_Plugin implements Typecho_Plugin_Interface
      */
     public static function filter($comments, $post,$last)
     {
-        $comment = empty($last)?$comments:$last;  //提升同接口插件间的兼容性
+        // 兼容其他过滤器返回空值或不完整评论数据的情况。
+        $comment = !empty($last) && is_array($last)
+            ? $last
+            : (is_array($comments) ? $comments : array());
+        $comment['cid'] = isset($comment['cid']) ? (int) $comment['cid'] : 0;
+        $comment['text'] = self::stringValue(isset($comment['text']) ? $comment['text'] : '');
+        $comment['ip'] = self::stringValue(isset($comment['ip']) ? $comment['ip'] : '');
+        $comment['mail'] = self::stringValue(isset($comment['mail']) ? $comment['mail'] : '');
+        $comment['url'] = self::stringValue(isset($comment['url']) ? $comment['url'] : '');
+        $comment['author'] = self::stringValue(isset($comment['author']) ? $comment['author'] : '');
+
         $options = Typecho_Widget::widget('Widget_Options');
         $user = Typecho_Widget::widget('Widget_User');
 		$filter_set = $options->plugin('SmartSpam');
+		$optVisitor = self::actionValue($filter_set, 'opt_visitor');
+		$optTitle = self::actionValue($filter_set, 'opt_title');
+		$optIp = self::actionValue($filter_set, 'opt_ip');
+		$optMail = self::actionValue($filter_set, 'opt_mail');
+		$optUrl = self::actionValue($filter_set, 'opt_url');
+		$optAuthor = self::actionValue($filter_set, 'opt_au');
+		$optAuthorLength = self::actionValue($filter_set, 'opt_au_length');
+		$optNoJpAuthor = self::actionValue($filter_set, 'opt_nojp_au');
+		$optNoUrlAuthor = self::actionValue($filter_set, 'opt_nourl_au');
+		$optNoJp = self::actionValue($filter_set, 'opt_nojp');
+		$optNoCn = self::actionValue($filter_set, 'opt_nocn');
+		$optLength = self::actionValue($filter_set, 'opt_length');
+		$optBan = self::actionValue($filter_set, 'opt_ban');
+		$optCheck = self::actionValue($filter_set, 'opt_chk');
+		$wordsIp = self::stringValue(self::configValue($filter_set, 'words_ip', ''));
+		$wordsMail = self::stringValue(self::configValue($filter_set, 'words_mail', ''));
+		$wordsUrl = self::stringValue(self::configValue($filter_set, 'words_url', ''));
+		$wordsAuthor = self::stringValue(self::configValue($filter_set, 'words_au', ''));
+		$wordsBan = self::stringValue(self::configValue($filter_set, 'words_ban', ''));
+		$wordsCheck = self::stringValue(self::configValue($filter_set, 'words_chk', ''));
+		$authorLengthMin = self::integerValue($filter_set, 'au_length_min', 1);
+		$authorLengthMax = self::integerValue($filter_set, 'au_length_max', 15);
+		$lengthMin = self::integerValue($filter_set, 'length_min', 5);
+		$lengthMax = self::integerValue($filter_set, 'length_max', 200);
 		$opt = "none";
 		$error = "";
         
 
 		//游客进行评论进行权限处理
-		if($opt == "none" && $filter_set->opt_visitor != "none" && !$user->hasLogin()){
+		if($opt === "none" && $optVisitor !== "none" && !$user->hasLogin()){
 			 $error = "对不起，本站暂时禁止游客进行评论！";
-			 $opt = $filter_set->opt_visitor;
+			 $opt = $optVisitor;
 		}
 
         //屏蔽评论内容包含文章标题
-		if ($opt == "none" && $filter_set->opt_title != "none") {
+		if ($opt === "none" && $optTitle !== "none") {
 			 $db = Typecho_Db::get();
             // 获取评论所在文章
             $po = $db->fetchRow($db->select('title')->from('table.contents')->where('cid = ?', $comment['cid']));        
-            if(strstr($comment['text'], $po['title'])){
+			$title = is_array($po) && isset($po['title'])
+				? self::stringValue($po['title'])
+				: '';
+			if ($title !== '' && false !== strpos($comment['text'], $title)) {
                 $error = "对不起，评论内容不允许包含文章标题";
-				$opt = $filter_set->opt_title;
+				$opt = $optTitle;
             }        
 		}
         
 
 		//屏蔽IP段处理
-		if ($opt == "none" && $filter_set->opt_ip != "none") {
-			if (SmartSpam_Plugin::check_ip($filter_set->words_ip, $comment['ip'])) {
+		if ($opt === "none" && $optIp !== "none") {
+			if (SmartSpam_Plugin::check_ip($wordsIp, $comment['ip'])) {
 				$error = "评论发布者的IP已被管理员屏蔽";
-				$opt = $filter_set->opt_ip;
+				$opt = $optIp;
 			}			
 		}       
         
         
         //屏蔽邮箱处理
-		if ($opt == "none" && $filter_set->opt_mail != "none") {
-			if (SmartSpam_Plugin::check_in($filter_set->words_mail, $comment['mail'])) {
+		if ($opt === "none" && $optMail !== "none") {
+			if (SmartSpam_Plugin::check_in($wordsMail, $comment['mail'])) {
 				$error = "评论发布者的邮箱地址被管理员屏蔽";
-				$opt = $filter_set->opt_mail;
+				$opt = $optMail;
 			}			
 		}  
         
         //屏蔽网址处理
-        if(!empty($filter_set->words_url)){
-            if ($opt == "none" && $filter_set->opt_url != "none") {
-                if (SmartSpam_Plugin::check_in($filter_set->words_url, $comment['url'])) {
-                    $error = "评论发布者的网址被管理员屏蔽";
-                    $opt = $filter_set->opt_url;
+        if ($wordsUrl !== ''){
+			if ($opt === "none" && $optUrl !== "none") {
+				if (SmartSpam_Plugin::check_in($wordsUrl, $comment['url'])) {
+					$error = "评论发布者的网址被管理员屏蔽";
+					$opt = $optUrl;
                 }			
             }
         }        
         
         
         //屏蔽昵称关键词处理
-		if ($opt == "none" && $filter_set->opt_au != "none") {
-			if (SmartSpam_Plugin::check_in($filter_set->words_au, $comment['author'])) {
+		if ($opt === "none" && $optAuthor !== "none") {
+			if (SmartSpam_Plugin::check_in($wordsAuthor, $comment['author'])) {
 				$error = "对不起，昵称的部分字符已经被管理员屏蔽，请更换";
-				$opt = $filter_set->opt_au;
+				$opt = $optAuthor;
 			}			
 		}
         
         
         //日文评论处理
-		if ($opt == "none" && $filter_set->opt_nojp != "none") {
+		if ($opt === "none" && $optNoJp !== "none") {
 			if (preg_match("/[\x{3040}-\x{31ff}]/u", $comment['text']) > 0) {
 				$error = "禁止使用日文";
-				$opt = $filter_set->opt_nojp;
+				$opt = $optNoJp;
 			}
 		}
         
         
         //日文用户昵称处理
-		if ($opt == "none" && $filter_set->opt_nojp_au != "none") {
+		if ($opt === "none" && $optNoJpAuthor !== "none") {
 			if (preg_match("/[\x{3040}-\x{31ff}]/u", $comment['author']) > 0) {
 				$error = "用户昵称禁止使用日文";
-				$opt = $filter_set->opt_nojp_au;
+				$opt = $optNoJpAuthor;
 			}
 		}
         
         
         //昵称长度检测
-		if ($opt == "none" && $filter_set->opt_au_length != "none") {            
-            if(SmartSpam_Plugin::strLength($comment['author']) < $filter_set->au_length_min){           	
-           		$error = "昵称请不得少于".$filter_set->au_length_min."个字符";
-				$opt = $filter_set->opt_au_length;
+		if ($opt === "none" && $optAuthorLength !== "none") {
+			if(SmartSpam_Plugin::strLength($comment['author']) < $authorLengthMin){
+				$error = "昵称请不得少于".$authorLengthMin."个字符";
+				$opt = $optAuthorLength;
             }else 
-            if(SmartSpam_Plugin::strLength($comment['author']) >  $filter_set->au_length_max){           	
-            	$error = "昵称请不得多于".$filter_set->au_length_max."个字符";
-				$opt = $filter_set->opt_au_length;
+            if(SmartSpam_Plugin::strLength($comment['author']) > $authorLengthMax){
+                $error = "昵称请不得多于".$authorLengthMax."个字符";
+				$opt = $optAuthorLength;
             }
              
 		}
         
         //用户昵称网址判断处理
-		if ($opt == "none" && $filter_set->opt_nourl_au != "none") {
+		if ($opt === "none" && $optNoUrlAuthor !== "none") {
             if (preg_match(" /^((https?|ftp|news):\/\/)?([a-z]([a-z0-9\-]*[\.。])+([a-z]{2}|aero|arpa|biz|com|coop|edu|gov|info|int|jobs|mil|museum|name|nato|net|org|pro|travel)|(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]))(\/[a-z0-9_\-\.~]+)*(\/([a-z0-9_\-\.]*)(\?[a-z0-9+_\-\.%=&]*)?)?(#[a-z][a-z0-9_]*)?$/ ", $comment['author']) > 0) {
 				$error = "用户昵称不允许为网址";
-				$opt = $filter_set->opt_nourl_au;
+				$opt = $optNoUrlAuthor;
 			}
 		}
             
         
 		//纯中文评论处理
-		if ($opt == "none" && $filter_set->opt_nocn != "none") {
+		if ($opt === "none" && $optNoCn !== "none") {
 			if (preg_match("/[\x{4e00}-\x{9fa5}]/u", $comment['text']) == 0) {
 				$error = "评论内容请不少于一个中文汉字";
-				$opt = $filter_set->opt_nocn;
+				$opt = $optNoCn;
 			}
 		}
         
         
         //字符长度检测
-		if ($opt == "none" && $filter_set->opt_length != "none") {            
-            if(SmartSpam_Plugin::strLength($comment['text']) < $filter_set->length_min){           	
-           		$error = "评论内容请不得少于".$filter_set->length_min."个字符";
-				$opt = $filter_set->opt_length;
+		if ($opt === "none" && $optLength !== "none") {
+			if(SmartSpam_Plugin::strLength($comment['text']) < $lengthMin){
+                $error = "评论内容请不得少于".$lengthMin."个字符";
+				$opt = $optLength;
             }else 
-            if(SmartSpam_Plugin::strLength($comment['text']) >  $filter_set->length_max){           	
-            	$error = "评论内容请不得多于".$filter_set->length_max."个字符";
-				$opt = $filter_set->opt_length;
+            if(SmartSpam_Plugin::strLength($comment['text']) > $lengthMax){
+                $error = "评论内容请不得多于".$lengthMax."个字符";
+				$opt = $optLength;
             }
              
 		}
         
 		//检查禁止词汇
-		if ($opt == "none" && $filter_set->opt_ban != "none") {
-			if (SmartSpam_Plugin::check_in($filter_set->words_ban, $comment['text'])) {
+		if ($opt === "none" && $optBan !== "none") {
+			if (SmartSpam_Plugin::check_in($wordsBan, $comment['text'])) {
 				$error = "评论内容中包含禁止词汇";
-				$opt = $filter_set->opt_ban;
+				$opt = $optBan;
 			}
 		}
 		//检查敏感词汇
-		if ($opt == "none" && $filter_set->opt_chk != "none") {
-			if (SmartSpam_Plugin::check_in($filter_set->words_chk, $comment['text'])) {
+		if ($opt === "none" && $optCheck !== "none") {
+			if (SmartSpam_Plugin::check_in($wordsCheck, $comment['text'])) {
 				$error = "评论内容中包含敏感词汇";
-				$opt = $filter_set->opt_chk;
+				$opt = $optCheck;
 			}
 		}
 
 
 
 		//执行操作
-		if ($opt == "abandon") {
+		if ($opt === "abandon") {
 			Typecho_Cookie::set('__typecho_remember_text', $comment['text']);
 
             /**
@@ -338,16 +375,18 @@ class SmartSpam_Plugin implements Typecho_Plugin_Interface
                     }
                 }
 
-                $default = !empty($post->permalink) ? $post->permalink : '/';
-                Typecho_Widget::widget('Widget_Options')->response->goBack($anchor, $default);
+            $default = is_object($post) && !empty($post->permalink)
+                ? $post->permalink
+                : '/';
+            Typecho_Widget::widget('Widget_Options')->response->goBack($anchor, $default);
             }
 
             throw new Typecho_Widget_Exception($error);
 		}
-		else if ($opt == "spam") {
+		else if ($opt === "spam") {
 			$comment['status'] = 'spam';
 		}
-		else if ($opt == "waiting") {
+		else if ($opt === "waiting") {
 			$comment['status'] = 'waiting';
 		}
 		Typecho_Cookie::delete('__typecho_remember_text');
@@ -357,9 +396,19 @@ class SmartSpam_Plugin implements Typecho_Plugin_Interface
     /**
     * PHP获取字符串中英文混合长度 
     */
-    private static function strLength($str){        
-        preg_match_all('/./us', $str, $match);
-        return count($match[0]);  // 输出9
+    private static function strLength($str)
+    {
+        $str = self::stringValue($str);
+        if ($str === '') {
+            return 0;
+        }
+
+        if (function_exists('mb_strlen')) {
+            return (int) mb_strlen($str, 'UTF-8');
+        }
+
+        $matched = preg_match_all('/./us', $str, $match);
+        return false === $matched ? 0 : (int) $matched;
     }
         
 
@@ -370,15 +419,17 @@ class SmartSpam_Plugin implements Typecho_Plugin_Interface
 	private static function check_in($words_str, $str)
 	{
         // 如果未设置屏蔽词，就不检测，直接通过
-        $words_str = trim($words_str); // 修复当禁止词汇列表里出现空行，会导致所有内容都被报告为禁止词汇
-        if ($words_str == NULL || $words_str == "") return false;
+		$words_str = is_string($words_str) ? trim($words_str) : '';
+		$str = self::stringValue($str);
+		if ($words_str === '' || $str === '') return false;
 
 		$words = explode("\n", $words_str);
-		if (empty($words)||empty($str)) {
+		if (empty($words)) {
 			return false;
 		}
 		foreach ($words as $word) {
-            if (false !== strpos($str, trim($word))) {
+            $word = trim($word);
+            if ($word !== '' && false !== strpos($str, $word)) {
                 return true;
             }
 		}
@@ -391,24 +442,78 @@ class SmartSpam_Plugin implements Typecho_Plugin_Interface
      */
 	private static function check_ip($words_ip, $ip)
 	{
-        $words_ip = trim($words_ip); // 修复当禁止IP列表里出现空行，会导致所有IP都被报告为禁止IP
-		$words = explode("\n", $words_ip);
-		if (empty($words)) {
+		$words_ip = is_string($words_ip) ? trim($words_ip) : '';
+		$ip = trim(self::stringValue($ip));
+		if ($words_ip === '' || $ip === '') {
 			return false;
 		}
+
+		$words = explode("\n", $words_ip);
 		foreach ($words as $word) {
 			$word = trim($word);
+			if ($word === '') {
+				continue;
+			}
 			if (false !== strpos($word, '*')) {
-				$word = "/^".str_replace('*', '\d{1,3}', $word)."$/";
-				if (preg_match($word, $ip)) {
+				$pattern = '/^' . str_replace('\\*', '[0-9]{1,3}', preg_quote($word, '/')) . '$/';
+				if (preg_match($pattern, $ip) === 1) {
 					return true;
 				}
 			} else {
-				if (false !== strpos($ip, $word)) {
+				if ($ip === $word) {
 					return true;
 				}
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * 读取配置项，不让缺失配置阻断评论处理。
+	 */
+	private static function configValue($config, $name, $default)
+	{
+		if (is_array($config) && array_key_exists($name, $config)) {
+			return $config[$name];
+		}
+
+		if ($config instanceof ArrayAccess && isset($config[$name])) {
+			return $config[$name];
+		}
+
+		if (is_object($config) && property_exists($config, $name)) {
+			return $config->{$name};
+		}
+
+		return $default;
+	}
+
+	/**
+	 * 将外部值安全转换为字符串。
+	 */
+	private static function stringValue($value)
+	{
+		return is_string($value) ? $value : (is_scalar($value) ? (string) $value : '');
+	}
+
+	/**
+	 * 读取合法的过滤动作，避免异常配置产生不可预期行为。
+	 */
+	private static function actionValue($config, $name)
+	{
+		$action = self::stringValue(self::configValue($config, $name, 'none'));
+		$actions = array('none', 'waiting', 'spam', 'abandon');
+
+		return in_array($action, $actions, true) ? $action : 'none';
+	}
+
+	/**
+	 * 读取整数配置，并在配置缺失或格式错误时使用默认值。
+	 */
+	private static function integerValue($config, $name, $default)
+	{
+		$value = self::configValue($config, $name, $default);
+
+		return is_numeric($value) ? (int) $value : $default;
 	}
 }
